@@ -56,6 +56,7 @@ def pairs_from_score_matrix(
     assert scores.shape == invalid.shape
     if isinstance(scores, np.ndarray):
         scores = torch.from_numpy(scores)
+    # get min score value to check if match can accept
     invalid = torch.from_numpy(invalid).to(scores.device)
     if min_score is not None:
         invalid |= scores < min_score
@@ -64,11 +65,11 @@ def pairs_from_score_matrix(
     topk = torch.topk(scores, num_select, dim=1)
     indices = topk.indices.cpu().numpy()
     valid = topk.values.isfinite().cpu().numpy()
-
+    scores_max = topk.values.cpu().numpy()
     pairs = []
     for i, j in zip(*np.where(valid)):
-        pairs.append((i, indices[i, j]))
-    return pairs
+        pairs.append((i, indices[i, j], scores_max[i, j]))
+    return pairs, scores_max
 
 
 def main(
@@ -110,12 +111,13 @@ def main(
 
     # Avoid self-matching
     self = np.array(query_names)[:, None] == np.array(db_names)[None]
-    pairs = pairs_from_score_matrix(sim, self, num_matched, min_score=0)
-    pairs = [(query_names[i], db_names[j]) for i, j in pairs]
+    pairs, scores_max = pairs_from_score_matrix(sim, self, num_matched, min_score=0)
+    print(scores_max.shape)
+    pairs = [(query_names[i], db_names[j], sc) for i, j, sc in pairs]
 
     logger.info(f"Found {len(pairs)} pairs.")
     with open(output, "w") as f:
-        f.write("\n".join(" ".join([i, j]) for i, j in pairs))
+        f.write("\n".join(" ".join([i, j, str(sc)]) for i, j, sc in pairs))
 
 
 if __name__ == "__main__":
