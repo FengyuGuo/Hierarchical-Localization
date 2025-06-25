@@ -10,3 +10,4 @@ datasets/*
 datasets/sacre_coeur/query
 *.mat
 .vscode/**
+**.torch
