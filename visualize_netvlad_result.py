@@ -9,12 +9,10 @@ from hloc.matchers import superglue
 import torch
 import argparse
 
-from camera.camera_model import EquiDistCamera
+from camera.camera_model import EquiDistCamera, RadTanCamera
 from dataset.mynteye_left import load_mynteye
+from dataset.dog import load_param
 
-
-cam_param = load_mynteye()
-cam_model = EquiDistCamera(np.array(cam_param['cam_mat'],dtype='float32'), np.array(cam_param['distortion'], dtype='float32'), np.array(cam_param['img_size_wh']))
 
 # example:
 # python visualize_netvlad_result.py --result_txt /media/guo/fs/Hierarchical-Localization/megaloc_top20.txt --query_img_path /media/guo/fs/Hierarchical-Localization/office_night_query/ --train_img_path /media/guo/fs/Hierarchical-Localization/office
@@ -43,10 +41,23 @@ parser.add_argument(
 )
 
 parser.add_argument(
+  '--dataset',
+  type=str,
+  help='dataset param to do ransac'
+)
+
+parser.add_argument(
   '--try_match',
   default=False,
   action='store_true',
   help='extract and match feature points'
+)
+
+parser.add_argument(
+  '--start_idx',
+  default=0,
+  type=int,
+  help='start index of query index'
 )
 
 args = parser.parse_args()
@@ -59,6 +70,12 @@ result_path = args.result_txt
 query_root = args.query_img_path
 train_root = args.train_img_path
 
+if args.dataset == 'mynteye':
+  cam_param = load_mynteye()
+  cam_model = EquiDistCamera(np.array(cam_param['cam_mat'],dtype='float32'), np.array(cam_param['distortion'], dtype='float32'), np.array(cam_param['img_size_wh']))
+elif args.dataset == 'd435i':
+  cam_param = load_param()
+  cam_model = RadTanCamera(np.array(cam_param['cam_mat'],dtype='float32'), np.array(cam_param['distortion'], dtype='float32'), np.array(cam_param['img_size_wh']))
 sp = superpoint.SuperPoint(superpoint.SuperPoint.default_conf).eval().to('cuda')
 sg = superglue.SuperGlue(superglue.SuperGlue.default_conf).eval().to('cuda')
 
@@ -68,7 +85,7 @@ print(df.head(10))
 
 query_imgs = pd.unique(df['query'].sort_values())
 # print(query_imgs)
-for i in range(1994, len(query_imgs)):
+for i in range(args.start_idx, len(query_imgs)):
   print('index: ', i)
   q=query_imgs[i]
   print('q:', q)
