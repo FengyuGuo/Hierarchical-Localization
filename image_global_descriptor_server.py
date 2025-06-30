@@ -32,8 +32,8 @@ while True:
   print(img.shape, img.dtype)
   img_tensor = torch.tensor(img.astype('float32')).to('cuda')
   data = {'image':img_tensor}
-
-  desc = mega(data)
+  with torch.set_grad_enabled(False):
+    desc = mega(data)
 
   desc = desc['global_descriptor'].cpu().detach().numpy()
   reply_header = {"shape": desc.shape, "dtype": str(desc.dtype)}
