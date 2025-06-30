@@ -15,7 +15,7 @@ from dataset.dog import load_param
 
 
 # example:
-# python visualize_netvlad_result.py --result_txt /media/guo/fs/Hierarchical-Localization/megaloc_top20.txt --query_img_path /media/guo/fs/Hierarchical-Localization/office_night_query/ --train_img_path /media/guo/fs/Hierarchical-Localization/office
+# python visualize_netvlad_result.py --result_txt /media/guo/fs/Hierarchical-Localization/dog_match_megaloc_top20.txt --query_img_path /media/guo/fs/Hierarchical-Localization/office_dog_real --train_img_path /media/guo/fs/Hierarchical-Localization/office_dog_d435 --dataset d435i --try_match --start_idx 100
 
 parser = argparse.ArgumentParser()
 

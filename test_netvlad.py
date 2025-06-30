@@ -3,7 +3,7 @@ from hloc.extractors.megaloc import MegaPlaces
 import cv2
 import numpy as np
 import torch
-test_img_path = '/home/guo/l.png'
+test_img_path = '/media/guo/fs/Hierarchical-Localization/office_dog_mynteye/frame000628.png'
 
 img=cv2.imread(test_img_path)
 
@@ -32,5 +32,6 @@ print(desc['global_descriptor'].shape)
 mega = MegaPlaces(MegaPlaces.default_conf).eval().to('cuda')
 
 desc = mega(data)
+print(desc['global_descriptor'].cpu().detach().numpy()[0])
 print(desc['global_descriptor'].dtype)
 print(desc['global_descriptor'].shape)
