@@ -13,12 +13,10 @@ socket = context.socket(zmq.REP)
 zmq_port = "ipc:///tmp/zmq_global_descriptor"
 socket.bind(zmq_port)
 
-print("image global descriptor node start listenning!")
+print(f"image global descriptor node start listen on port: {zmq_port}")
 
 while True:
-  
   msg = socket.recv_json()
-
   shape = msg["shape"]
   dtype = np.dtype(msg["dtype"])
   data = socket.recv()
