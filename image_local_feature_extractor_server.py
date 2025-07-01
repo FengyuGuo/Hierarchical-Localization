@@ -28,10 +28,15 @@ def get_args():
     default='/home/guo/code/LightGlue-ONNX/weights/superpoint_lightglue.onnx',
     help='path to weight of matcher. needed by lightglue matcher'
   )
+  parser.add_argument(
+    '--viz',
+    action='store_true',
+    help='show feature extraction and tracking result'
+  )
   return parser
 
 class LocalFeatureServer:
-  def __init__(self, match_model, ext_path, model_weight, cam_model):
+  def __init__(self, match_model, ext_path, model_weight, cam_model, viz = False):
     for p in ext_path:
       sys.path.append(p)
     self.method = match_model
@@ -48,6 +53,8 @@ class LocalFeatureServer:
     self.extractor = superpoint.SuperPoint(superpoint.SuperPoint.default_conf).eval().to('cuda')
 
     self.cam_model = cam_model
+
+    self.viz = viz
 
     self.last_img = None
     # self.last_tensor = None
@@ -286,15 +293,19 @@ class LocalFeatureServer:
           self.track_cnt += 1
 
       self.update_track_db(cur_frame_trackid, kps0, True)
-      self.show_tracks(img)
+      
       self.last_trackid = cur_frame_trackid
 
       self.send_feature(np.array(cur_frame_trackid, dtype='int'), q_desc['keypoints'][0].cpu().numpy(), q_desc['descriptors'][0].cpu().numpy())
 
       print('{} image got, track number: {}, {} tracked, {} new assigned'.format(self.img_cnt, self.track_cnt, len(cur_frame_id_to_last_frame_id), len(kps0) - len(cur_frame_id_to_last_frame_id)))
       print('{} new feat per image'.format(self.track_cnt / self.img_cnt))
-      cv2.imshow('match', viz)
-      k = cv2.waitKey(1)
+      
+      if self.viz:
+        cv2.imshow('match', viz)
+        cv2.waitKey(1)
+        self.show_tracks(img)
+
 
 
 def main():
@@ -309,7 +320,7 @@ def main():
   cam_param = load_mynteye()
   cam_model = EquiDistCamera(np.array(cam_param['cam_mat'],dtype='float32'), np.array(cam_param['distortion'], dtype='float32'), np.array(cam_param['img_size_wh']))
 
-  server = LocalFeatureServer(args.match_model, [args.lightglue_path], args.model_weight, cam_model)
+  server = LocalFeatureServer(args.match_model, [args.lightglue_path], args.model_weight, cam_model, args.viz)
 
   server.run()
 
