@@ -52,8 +52,53 @@ class LocalFeatureServer:
     self.last_img = None
     self.last_tensor = None
     self.last_desc = None
+    self.last_trackid = []
+
+    self.track_cnt = 0 #track id for next new feature
+    self.img_cnt = 0
+
+    self.track_db = {}
 
     print('local feature server init finished!')
+  
+  def update_track_db(self, cur_frame_id, cur_frame_pt, clean_obsolete_track = False):
+    for id, pt in zip(cur_frame_id, cur_frame_pt):
+      if id in self.track_db:
+        self.track_db[id].append(pt)
+      else:
+        self.track_db[id] = [pt]
+    cur_frame_id_set = set(cur_frame_id)
+    if clean_obsolete_track:
+      delete_track = []
+      for k, v in self.track_db.items():
+        if k not in cur_frame_id_set:
+          delete_track.append(k)
+      
+      for k in delete_track:
+        self.track_db.pop(k)
+
+  def show_tracks(self, cur_frame_img):
+    if cur_frame_img.shape[-1] != 3:
+      viz = cv2.cvtColor(cur_frame_img, cv2.COLOR_GRAY2BGR)
+    else:
+      viz = cur_frame_img
+    tracks_num = 0
+    tracks_sum = 0
+    for id, pts in self.track_db.items():
+      if len(pts) == 1:
+        continue
+      for i in range(len(pts) - 1):
+        pt0 = pts[i].astype('int')
+        pt1 = pts[i+1].astype('int')
+        cv2.circle(viz, pt0, 1, (255, 0, 0), 2)
+        cv2.line(viz, pt0, pt1, (0, 0, 255), 1, cv2.LINE_AA)
+      cv2.circle(viz, pts[-1].astype('int'), 1, (255, 0, 0), 2)
+      tracks_sum += len(pts)
+      tracks_num += 1
+    print('mean track len: {}'.format(tracks_sum / tracks_num))
+    cv2.imshow('tracks', viz)
+    cv2.waitKey(1)
+
   def run(self):
     context = zmq.Context()
     socket = context.socket(zmq.REP)
@@ -71,18 +116,26 @@ class LocalFeatureServer:
       print('got image data from zmq {}'.format(len(data)))
       start = time.time()
       img = np.frombuffer(data, dtype=dtype).reshape(shape)
-
+      self.img_cnt += 1
 
       q_tensor = torch.from_numpy(img).float() / 255.0
       q_tensor = q_tensor.unsqueeze(0).unsqueeze(0)
-      # print(img_tensor.shape)
+
       q_desc = self.extractor({"image": q_tensor.to('cuda', non_blocking=True)})
+      print(q_desc['keypoints'][0].shape)
       print(q_desc['descriptors'][0].shape)
+
       if self.last_img is None:
         self.last_img = img
         self.last_tensor = q_tensor
         self.last_desc = q_desc
+        self.last_trackid = [i for i in range(q_desc['keypoints'][0].shape[0])]
+        self.track_cnt = len(self.last_trackid) + 1
         socket.send_string("got image")
+
+        pts = q_desc['keypoints'][0].cpu().numpy()
+        self.update_track_db(self.last_trackid, pts)
+
         continue
       viz = np.hstack((img, self.last_img))
       viz = cv2.cvtColor(viz, cv2.COLOR_GRAY2BGR)
@@ -98,8 +151,8 @@ class LocalFeatureServer:
       null_tensor = null_tensor.unsqueeze(0).unsqueeze(0)
 
       t_desc = self.last_desc
-      kps0 = q_desc['keypoints'][0].cpu().numpy()
-      kps1 = t_desc['keypoints'][0].cpu().numpy()
+      kps0 = q_desc['keypoints'][0].cpu().numpy() # new image
+      kps1 = t_desc['keypoints'][0].cpu().numpy() # last image
       if self.method == 'superglue':
         match_input = {
           'image0': null_tensor,
@@ -135,16 +188,23 @@ class LocalFeatureServer:
       # print(mt0)
       pts0 = []
       pts1 = []
+      remain_id_after_match1 = []
+      remain_id_after_match2 = []
+      cur_frame_trackid = []
       for idx1, idx2 in enumerate(mt0):
         if idx2 == -1:
           continue
+        remain_id_after_match1.append(idx1) # frame id, not track id
         pts0.append(kps0[idx1])
+        remain_id_after_match2.append(idx2)
         pts1.append(kps1[idx2])
       raw_match = len(pts0)
       pts0 = np.array(pts0, dtype='float32').reshape(-1, 1, 2)
       pts1 = np.array(pts1, dtype='float32').reshape(-1, 1, 2)
       print(pts0.shape)
       if pts0.shape[0] > 0:
+        remain_id_after_ransac1 = []
+        remain_id_after_ransac2 = []
         pts0_n = self.cam_model.undistort_points(pts0)
         pts1_n = self.cam_model.undistort_points(pts1)
         F, mask = cv2.findFundamentalMat(pts0_n, pts1_n, cv2.FM_RANSAC, ransacReprojThreshold=1.0, confidence=0.99, maxIters = 200)
@@ -158,12 +218,32 @@ class LocalFeatureServer:
             if m == 0:
               continue
             good += 1
+            remain_id_after_ransac1.append(remain_id_after_match1[i])
+            remain_id_after_ransac2.append(remain_id_after_match2[i])
             pt0 = pts0.astype('int')[i][0]
             pt1 = pts1.astype('int')[i][0]
             cv2.circle(viz, pt0, 2, (255, 0, 0), 2)
             cv2.circle(viz, (pt1[0] + img.shape[1], pt1[1]), 2, (255, 0, 0), 2)
             cv2.line(viz, pt0, (pt1[0] + img.shape[1], pt1[1]), (0, 0, 255), 1, cv2.LINE_AA)
+        
+        cur_frame_id_to_last_frame_id = {}
+        for id1, id2 in zip(remain_id_after_ransac1, remain_id_after_ransac2):
+          # print('{} --> {}'.format(id1, id2))
+          cur_frame_id_to_last_frame_id[id1] = id2
 
+        for i in range(len(kps0)):
+          if i in cur_frame_id_to_last_frame_id:
+            cur_frame_trackid.append(self.last_trackid[cur_frame_id_to_last_frame_id[i]])
+          else:
+            cur_frame_trackid.append(self.track_cnt)
+            self.track_cnt += 1
+
+        self.update_track_db(cur_frame_trackid, kps0, True)
+        self.show_tracks(img)
+        self.last_trackid = cur_frame_trackid
+
+        print('{} image got, track number: {}, {} tracked, {} new assigned'.format(self.img_cnt, self.track_cnt, len(cur_frame_id_to_last_frame_id), len(kps0) - len(cur_frame_id_to_last_frame_id)))
+        print('{} new feat per image'.format(self.track_cnt / self.img_cnt))
         cv2.imshow('match', viz)
         k = cv2.waitKey(1)
         if k == 'q':
