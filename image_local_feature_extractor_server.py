@@ -50,7 +50,7 @@ class LocalFeatureServer:
     self.cam_model = cam_model
 
     self.last_img = None
-    self.last_tensor = None
+    # self.last_tensor = None
     self.last_desc = None
     self.last_trackid = []
 
@@ -58,6 +58,12 @@ class LocalFeatureServer:
     self.img_cnt = 0
 
     self.track_db = {}
+
+    self.context = zmq.Context()
+    self.socket = self.context.socket(zmq.REP)
+    zmq_port = "ipc:///tmp/zmq_spsg"
+    self.socket.bind(zmq_port)
+    print(f"image sp sg node start listen on port: {zmq_port}")
 
     print('local feature server init finished!')
   
@@ -99,19 +105,59 @@ class LocalFeatureServer:
     cv2.imshow('tracks', viz)
     cv2.waitKey(1)
 
+  def send_feature(self, cur_frame_ids, cur_frame_kps, cur_frame_desc):
+
+    cur_frame_id_float = cur_frame_ids.astype('float32').reshape(-1, 1)
+
+    cur_frame_desc_T = cur_frame_desc.T
+    print(cur_frame_id_float.shape, cur_frame_kps.shape, cur_frame_desc_T.shape)
+    result = np.hstack((cur_frame_id_float, cur_frame_kps, cur_frame_desc_T))
+
+    result_header = {
+      "shape": result.shape,
+      "dtype": str(result.dtype)
+    }
+    self.socket.send_json(result_header, zmq.SNDMORE)
+    self.socket.send(result)
+
+
+    # frame_id_header = {
+    #   "shape": cur_frame_ids.shape,
+    #   "dtype": str(cur_frame_ids.dtype)
+    # }
+    # self.socket.send_json(frame_id_header, zmq.SNDMORE)
+    # self.socket.send(cur_frame_ids)
+
+    # reply = self.socket.recv_string()
+
+    # frame_kps_header = {
+    #   "shape": cur_frame_kps.shape,
+    #   "dtype": str(cur_frame_kps.dtype)
+    # }
+    # self.socket.send_json(frame_kps_header, zmq.SNDMORE)
+    # self.socket.send(cur_frame_kps)
+
+    # reply = self.socket.recv_string()
+
+    # frame_desc_header = {
+    #   "shape": cur_frame_desc.shape,
+    #   "dtype": str(cur_frame_desc.dtype)
+    # }
+    # self.socket.send_json(frame_desc_header, zmq.SNDMORE)
+    # self.socket.send(cur_frame_desc)
+
+    # reply = self.socket.recv_string()
+
+    # self.socket.send_string("feature tracking finished!")
+
   def run(self):
-    context = zmq.Context()
-    socket = context.socket(zmq.REP)
-    zmq_port = "ipc:///tmp/zmq_spsg"
-    socket.bind(zmq_port)
-    print(f"image sp sg node start listen on port: {zmq_port}")
 
     while True:
-      msg = socket.recv_json()
+      msg = self.socket.recv_json()
       print('got json from zmq: {}'.format(msg))
       shape = msg["shape"]
       dtype = np.dtype(msg["dtype"])
-      data = socket.recv()
+      data = self.socket.recv()
       
       print('got image data from zmq {}'.format(len(data)))
       start = time.time()
@@ -120,18 +166,19 @@ class LocalFeatureServer:
 
       q_tensor = torch.from_numpy(img).float() / 255.0
       q_tensor = q_tensor.unsqueeze(0).unsqueeze(0)
+      with torch.no_grad():
+        q_desc = self.extractor({"image": q_tensor.to('cuda', non_blocking=True)})
+      print(q_desc['keypoints'][0].dtype)
+      print(q_desc['descriptors'][0].dtype)
 
-      q_desc = self.extractor({"image": q_tensor.to('cuda', non_blocking=True)})
-      print(q_desc['keypoints'][0].shape)
-      print(q_desc['descriptors'][0].shape)
-
-      if self.last_img is None:
+      if self.last_desc is None:
         self.last_img = img
-        self.last_tensor = q_tensor
+        # self.last_tensor = q_tensor
         self.last_desc = q_desc
         self.last_trackid = [i for i in range(q_desc['keypoints'][0].shape[0])]
         self.track_cnt = len(self.last_trackid) + 1
-        socket.send_string("got image")
+        # self.socket.send_string("got image")
+        self.send_feature(np.array(self.last_trackid, dtype='int'), q_desc['keypoints'][0].cpu().numpy(), q_desc['descriptors'][0].cpu().numpy())
 
         pts = q_desc['keypoints'][0].cpu().numpy()
         self.update_track_db(self.last_trackid, pts)
@@ -144,7 +191,7 @@ class LocalFeatureServer:
       # print(q_desc['keypoints'][0])
       # print(q_desc.keys())
 
-      t_tensor = self.last_tensor
+      # t_tensor = self.last_tensor
 
       null_img = np.zeros_like(img)
       null_tensor = torch.from_numpy(null_img).float()
@@ -179,9 +226,9 @@ class LocalFeatureServer:
         }
         # print(match_input['image0']['keypoints'].shape)
         # print(match_input['image0']['descriptors'].shape)
-      
-      match = self.matcher(match_input)
-      self.last_tensor = q_tensor
+      with torch.no_grad():
+        match = self.matcher(match_input)
+      # self.last_tensor = q_tensor
       self.last_desc = q_desc
       self.last_img = img
       mt0 = match['matches0'].cpu().numpy()[0]
@@ -202,9 +249,9 @@ class LocalFeatureServer:
       pts0 = np.array(pts0, dtype='float32').reshape(-1, 1, 2)
       pts1 = np.array(pts1, dtype='float32').reshape(-1, 1, 2)
       print(pts0.shape)
+      remain_id_after_ransac1 = []
+      remain_id_after_ransac2 = []
       if pts0.shape[0] > 0:
-        remain_id_after_ransac1 = []
-        remain_id_after_ransac2 = []
         pts0_n = self.cam_model.undistort_points(pts0)
         pts1_n = self.cam_model.undistort_points(pts1)
         F, mask = cv2.findFundamentalMat(pts0_n, pts1_n, cv2.FM_RANSAC, ransacReprojThreshold=1.0, confidence=0.99, maxIters = 200)
@@ -226,29 +273,29 @@ class LocalFeatureServer:
             cv2.circle(viz, (pt1[0] + img.shape[1], pt1[1]), 2, (255, 0, 0), 2)
             cv2.line(viz, pt0, (pt1[0] + img.shape[1], pt1[1]), (0, 0, 255), 1, cv2.LINE_AA)
         
-        cur_frame_id_to_last_frame_id = {}
-        for id1, id2 in zip(remain_id_after_ransac1, remain_id_after_ransac2):
-          # print('{} --> {}'.format(id1, id2))
-          cur_frame_id_to_last_frame_id[id1] = id2
+      cur_frame_id_to_last_frame_id = {}
+      for id1, id2 in zip(remain_id_after_ransac1, remain_id_after_ransac2):
+        # print('{} --> {}'.format(id1, id2))
+        cur_frame_id_to_last_frame_id[id1] = id2
 
-        for i in range(len(kps0)):
-          if i in cur_frame_id_to_last_frame_id:
-            cur_frame_trackid.append(self.last_trackid[cur_frame_id_to_last_frame_id[i]])
-          else:
-            cur_frame_trackid.append(self.track_cnt)
-            self.track_cnt += 1
+      for i in range(len(kps0)):
+        if i in cur_frame_id_to_last_frame_id:
+          cur_frame_trackid.append(self.last_trackid[cur_frame_id_to_last_frame_id[i]])
+        else:
+          cur_frame_trackid.append(self.track_cnt)
+          self.track_cnt += 1
 
-        self.update_track_db(cur_frame_trackid, kps0, True)
-        self.show_tracks(img)
-        self.last_trackid = cur_frame_trackid
+      self.update_track_db(cur_frame_trackid, kps0, True)
+      self.show_tracks(img)
+      self.last_trackid = cur_frame_trackid
 
-        print('{} image got, track number: {}, {} tracked, {} new assigned'.format(self.img_cnt, self.track_cnt, len(cur_frame_id_to_last_frame_id), len(kps0) - len(cur_frame_id_to_last_frame_id)))
-        print('{} new feat per image'.format(self.track_cnt / self.img_cnt))
-        cv2.imshow('match', viz)
-        k = cv2.waitKey(1)
-        if k == 'q':
-          break
-      socket.send_string("got image")
+      self.send_feature(np.array(cur_frame_trackid, dtype='int'), q_desc['keypoints'][0].cpu().numpy(), q_desc['descriptors'][0].cpu().numpy())
+
+      print('{} image got, track number: {}, {} tracked, {} new assigned'.format(self.img_cnt, self.track_cnt, len(cur_frame_id_to_last_frame_id), len(kps0) - len(cur_frame_id_to_last_frame_id)))
+      print('{} new feat per image'.format(self.track_cnt / self.img_cnt))
+      cv2.imshow('match', viz)
+      k = cv2.waitKey(1)
+
 
 def main():
 
