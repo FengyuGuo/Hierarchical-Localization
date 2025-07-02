@@ -30,7 +30,10 @@ def list_h5_names(path):
                 names.append(obj.parent.name.strip("/"))
 
         fd.visititems(visit_fn)
-    return list(set(names))
+    ret = list(set(names))
+    ret.sort()
+    # return list(set(names)).sort()
+    return ret
 
 
 def get_keypoints(
